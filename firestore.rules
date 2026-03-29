@@ -25,11 +25,11 @@ service cloud.firestore {
     }
 
     function isValidApkFile(data) {
-      return data.keys().hasAll(['id', 'name', 'size', 'storagePath', 'downloadUrl', 'createdAt']) &&
+      return data.keys().hasAll(['id', 'name', 'size', 'totalChunks', 'downloadUrl', 'createdAt']) &&
              data.id is string && data.id.size() > 0 &&
              data.name is string && data.name.size() > 0 && data.name.size() < 255 &&
-             data.size is number && data.size > 0 && data.size < 104857600 && // 100MB limit
-             data.storagePath is string && data.storagePath.size() > 0 &&
+             data.size is number && data.size > 0 &&
+             data.totalChunks is number && data.totalChunks > 0 &&
              data.downloadUrl is string && data.downloadUrl.size() > 0 &&
              data.createdAt is timestamp;
     }
@@ -45,6 +45,14 @@ service cloud.firestore {
       allow create: if isValidApkFile(request.resource.data);
       // No updates or deletes allowed for now
       allow update, delete: if false;
+
+      // Rules for file chunks
+      match /chunks/{chunkId} {
+        allow read: if true;
+        allow create: if request.resource.data.keys().hasAll(['index', 'data']) &&
+                        request.resource.data.index is number &&
+                        request.resource.data.data is string;
+      }
     }
 
     // Connection test collection

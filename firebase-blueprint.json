@@ -17,9 +17,9 @@
           "type": "number",
           "description": "File size in bytes."
         },
-        "storagePath": {
-          "type": "string",
-          "description": "Path to the file in Firebase Storage."
+        "totalChunks": {
+          "type": "number",
+          "description": "Total number of chunks stored in Firestore."
         },
         "downloadUrl": {
           "type": "string",
@@ -31,13 +31,33 @@
           "description": "When the file was uploaded."
         }
       },
-      "required": ["id", "name", "size", "storagePath", "downloadUrl", "createdAt"]
+      "required": ["id", "name", "size", "totalChunks", "downloadUrl", "createdAt"]
+    },
+    "apkFileChunk": {
+      "title": "APK File Chunk",
+      "description": "A single chunk of an APK file.",
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "number",
+          "description": "Index of the chunk."
+        },
+        "data": {
+          "type": "string",
+          "description": "Base64 encoded chunk data."
+        }
+      },
+      "required": ["index", "data"]
     }
   },
   "firestore": {
     "/apkFiles/{fileId}": {
       "schema": "apkFile",
       "description": "Collection of uploaded APK file metadata."
+    },
+    "/apkFiles/{fileId}/chunks/{chunkId}": {
+      "schema": "apkFileChunk",
+      "description": "Subcollection of APK file chunks."
     }
   }
 }
