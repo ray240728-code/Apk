@@ -26,7 +26,12 @@ export default function App() {
   const [isFirebaseReady, setIsFirebaseReady] = useState<boolean | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isSharedLink, setIsSharedLink] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passkeyInput, setPasskeyInput] = useState('');
+  const [passkeyError, setPasskeyError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const DEFAULT_PASSKEY = "JSWALLET";
 
   // Connection test to Firebase
   useEffect(() => {
@@ -127,6 +132,26 @@ export default function App() {
       setUploadedFile(null);
     }
   };
+
+  const handlePasskeySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passkeyInput === DEFAULT_PASSKEY) {
+      setIsAuthenticated(true);
+      setPasskeyError(false);
+      // Store in session storage so they don't have to re-enter during the session
+      sessionStorage.setItem('apk_share_auth', 'true');
+    } else {
+      setPasskeyError(true);
+      setPasskeyInput('');
+    }
+  };
+
+  // Check session storage for existing authentication
+  useEffect(() => {
+    if (sessionStorage.getItem('apk_share_auth') === 'true') {
+      setIsAuthenticated(true);
+    }
+  }, []);
 
   const handleUpload = async () => {
     if (!file) return;
@@ -324,7 +349,41 @@ export default function App() {
         {/* Upload Section */}
         {!isSharedLink && (
           <section className="space-y-8">
-            {isInitialLoading ? (
+            {!isAuthenticated ? (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-w-md mx-auto bg-white/[0.02] border border-white/10 p-8 rounded-3xl text-center"
+              >
+                <div className="w-16 h-16 bg-orange-500/20 rounded-2xl flex items-center justify-center text-orange-500 mx-auto mb-6">
+                  <Wifi size={32} />
+                </div>
+                <h2 className="text-2xl font-bold mb-2">Upload Protected</h2>
+                <p className="text-white/40 text-sm mb-8 uppercase tracking-widest font-medium">Enter passkey to continue</p>
+                
+                <form onSubmit={handlePasskeySubmit} className="space-y-4">
+                  <input 
+                    type="password"
+                    value={passkeyInput}
+                    onChange={(e) => setPasskeyInput(e.target.value)}
+                    placeholder="Enter Passkey"
+                    className={cn(
+                      "w-full bg-black/40 border rounded-2xl px-6 py-4 text-center text-lg font-bold tracking-[0.5em] focus:outline-none transition-all",
+                      passkeyError ? "border-red-500 shadow-[0_0_20px_rgba(239,68,68,0.2)]" : "border-white/10 focus:border-orange-500/50"
+                    )}
+                  />
+                  {passkeyError && (
+                    <p className="text-red-500 text-xs font-bold uppercase tracking-widest">Incorrect Passkey</p>
+                  )}
+                  <button 
+                    type="submit"
+                    className="w-full py-4 bg-white text-black rounded-2xl font-bold text-lg hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  >
+                    Unlock Upload
+                  </button>
+                </form>
+              </motion.div>
+            ) : isInitialLoading ? (
               <div className="flex flex-col items-center justify-center p-20 bg-white/[0.02] border border-white/10 rounded-3xl gap-4">
                 <Loader2 className="animate-spin text-orange-500" size={40} />
                 <p className="text-white/40 uppercase tracking-widest text-xs">Loading shared file details...</p>
@@ -373,32 +432,34 @@ export default function App() {
               </motion.div>
             )}
 
-            <div className="flex justify-center">
-              <AnimatePresence mode="wait">
-                {file && !isUploading && (
-                  <motion.button
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -10 }}
-                    onClick={handleUpload}
-                    className="px-10 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 active:scale-95 transition-all shadow-[0_10px_30px_rgba(255,255,255,0.2)]"
-                  >
-                    Upload APK to Firestore
-                  </motion.button>
-                )}
+            {isAuthenticated && (
+              <div className="flex justify-center">
+                <AnimatePresence mode="wait">
+                  {file && !isUploading && (
+                    <motion.button
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                      onClick={handleUpload}
+                      className="px-10 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 active:scale-95 transition-all shadow-[0_10px_30px_rgba(255,255,255,0.2)]"
+                    >
+                      Upload APK to Firestore
+                    </motion.button>
+                  )}
 
-                {isUploading && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="flex items-center gap-3 text-white/60"
-                  >
-                    <Loader2 className="animate-spin" />
-                    <span className="font-medium tracking-wide uppercase text-xs">Storing in Firestore (Free Tier)...</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+                  {isUploading && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      className="flex items-center gap-3 text-white/60"
+                    >
+                      <Loader2 className="animate-spin" />
+                      <span className="font-medium tracking-wide uppercase text-xs">Storing in Firestore (Free Tier)...</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
 
             {error && (
               <motion.div
