@@ -1,0 +1,55 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: apkFiles
+    // Document ID: {fileId}
+    // Fields:
+    //   - id: string (required) - Unique ID for the file.
+    //   - name: string (required) - Original filename.
+    //   - size: number (required) - File size in bytes.
+    //   - storagePath: string (required) - Path to the file in Firebase Storage.
+    //   - downloadUrl: string (required) - Public download URL for the file.
+    //   - createdAt: timestamp (required) - When the file was uploaded.
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isValidApkFile(data) {
+      return data.keys().hasAll(['id', 'name', 'size', 'storagePath', 'downloadUrl', 'createdAt']) &&
+             data.id is string && data.id.size() > 0 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 255 &&
+             data.size is number && data.size > 0 && data.size < 104857600 && // 100MB limit
+             data.storagePath is string && data.storagePath.size() > 0 &&
+             data.downloadUrl is string && data.downloadUrl.size() > 0 &&
+             data.createdAt is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /apkFiles/{fileId} {
+      // Allow public read for anyone with the link
+      allow read: if true;
+      // Allow public create for now (since we don't have auth yet)
+      allow create: if isValidApkFile(request.resource.data);
+      // No updates or deletes allowed for now
+      allow update, delete: if false;
+    }
+
+    // Connection test collection
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

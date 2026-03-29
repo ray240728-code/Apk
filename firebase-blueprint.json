@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "apkFile": {
+      "title": "APK File",
+      "description": "Metadata for an uploaded APK file.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique ID for the file."
+        },
+        "name": {
+          "type": "string",
+          "description": "Original filename."
+        },
+        "size": {
+          "type": "number",
+          "description": "File size in bytes."
+        },
+        "storagePath": {
+          "type": "string",
+          "description": "Path to the file in Firebase Storage."
+        },
+        "downloadUrl": {
+          "type": "string",
+          "description": "Public download URL for the file."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the file was uploaded."
+        }
+      },
+      "required": ["id", "name", "size", "storagePath", "downloadUrl", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/apkFiles/{fileId}": {
+      "schema": "apkFile",
+      "description": "Collection of uploaded APK file metadata."
+    }
+  }
+}

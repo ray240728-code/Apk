@@ -1,7 +1,10 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Download, File, CheckCircle, AlertCircle, Loader2, Share2, Copy } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
+import { db, storage } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 
 interface UploadedFile {
   id: string;
@@ -16,24 +19,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [copied, setCopied] = useState(false);
-  const [isBackendMissing, setIsBackendMissing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Check if backend is available
-  React.useEffect(() => {
-    fetch('/api/health')
-      .then(res => {
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-          setIsBackendMissing(false);
-        } else {
-          setIsBackendMissing(true);
-        }
-      })
-      .catch(() => {
-        setIsBackendMissing(true);
-      });
-  }, []);
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -63,29 +49,36 @@ export default function App() {
     setIsUploading(true);
     setError(null);
 
-    const formData = new FormData();
-    formData.append('apk', file);
-
     try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
+      const fileId = crypto.randomUUID();
+      const storagePath = `apks/${fileId}/${file.name}`;
+      const storageRef = ref(storage, storagePath);
+
+      // 1. Upload to Firebase Storage
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+
+      // 2. Store metadata in Firestore
+      const fileMetadata = {
+        id: fileId,
+        name: file.name,
+        size: file.size,
+        storagePath: storagePath,
+        downloadUrl: downloadUrl,
+        createdAt: serverTimestamp(),
+      };
+
+      await setDoc(doc(db, 'apkFiles', fileId), fileMetadata);
+
+      setUploadedFile({
+        id: fileId,
+        name: file.name,
+        size: file.size,
+        downloadUrl: downloadUrl,
       });
-
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        throw new Error("Invalid server response. This app requires a Node.js backend to handle uploads. Please use the Cloud Run URL instead of Netlify.");
-      }
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Upload failed');
-      }
-
-      setUploadedFile(data);
       setFile(null);
     } catch (err: any) {
+      console.error('Upload error:', err);
       setError(err.message || 'An error occurred during upload.');
     } finally {
       setIsUploading(false);
@@ -94,7 +87,7 @@ export default function App() {
 
   const copyToClipboard = () => {
     if (!uploadedFile) return;
-    const fullUrl = `${window.location.origin}${uploadedFile.downloadUrl}`;
+    const fullUrl = uploadedFile.downloadUrl;
     navigator.clipboard.writeText(fullUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -123,17 +116,6 @@ export default function App() {
               Fast, secure, and simple APK sharing. Upload your file and get a link instantly.
             </p>
           </motion.div>
-
-          {isBackendMissing && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="mt-8 p-4 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-orange-400 text-sm max-w-lg mx-auto"
-            >
-              <p className="font-bold mb-1">⚠️ Backend Unavailable</p>
-              <p className="opacity-80">This app requires a Node.js server to handle uploads. It looks like you're running on a static host (like Netlify) where the server is not active.</p>
-            </motion.div>
-          )}
         </header>
 
         {/* Upload Section */}
@@ -240,7 +222,8 @@ export default function App() {
                     <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <a 
                         href={uploadedFile.downloadUrl}
-                        download
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="flex items-center gap-2 px-6 py-3 bg-blue-500 hover:bg-blue-600 rounded-2xl font-bold transition-all"
                       >
                         <Download size={18} />
@@ -261,7 +244,7 @@ export default function App() {
                 <div className="mt-10 p-4 bg-black/40 rounded-2xl border border-white/5 flex items-center gap-4 overflow-hidden">
                   <Share2 size={16} className="text-white/20 shrink-0" />
                   <code className="text-white/40 text-sm truncate select-all">
-                    {window.location.origin}{uploadedFile.downloadUrl}
+                    {uploadedFile.downloadUrl}
                   </code>
                 </div>
               </div>
