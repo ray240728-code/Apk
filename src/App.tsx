@@ -3,7 +3,7 @@ import { Upload, Download, File, CheckCircle, AlertCircle, Loader2, Share2, Copy
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import { db } from './firebase';
-import { doc, setDoc, getDoc, serverTimestamp, getDocFromServer, collection, query, orderBy, limit, onSnapshot, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp, getDocFromServer, collection, query, orderBy, limit, onSnapshot, Timestamp, writeBatch, getDocs } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from './lib/firebaseUtils';
 
 interface UploadedFile {
@@ -94,59 +94,110 @@ export default function App() {
     setError(null);
 
     try {
-      // 1. Upload to Local Server API
-      const formData = new FormData();
-      formData.append('file', file);
+      const fileId = crypto.randomUUID();
+      const CHUNK_SIZE = 700 * 1024; // 700KB chunks to stay safe under 1MB limit
+      
+      // Read file as ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+      const totalChunks = Math.ceil(uint8Array.length / CHUNK_SIZE);
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
-      }
-
-      const uploadResult = await response.json();
-      const fileId = uploadResult.id;
-      const downloadUrl = window.location.origin + uploadResult.url;
-
-      // 2. Store metadata in Firestore
+      // 1. Store metadata in Firestore
       const fileMetadata = {
         id: fileId,
         name: file.name,
         size: file.size,
-        storagePath: uploadResult.url,
-        downloadUrl: downloadUrl,
+        totalChunks: totalChunks,
+        downloadUrl: `firestore://${fileId}`, // Internal reference
         createdAt: serverTimestamp(),
       };
 
-      const path = `apkFiles/${fileId}`;
+      const metaPath = `apkFiles/${fileId}`;
       try {
         await setDoc(doc(db, 'apkFiles', fileId), fileMetadata);
       } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, path);
+        handleFirestoreError(err, OperationType.WRITE, metaPath);
+      }
+
+      // 2. Upload chunks to Firestore subcollection
+      // We use batches for efficiency (max 500 writes per batch)
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, uint8Array.length);
+        const chunkData = uint8Array.slice(start, end);
+        
+        // Convert chunk to Base64 string for Firestore storage
+        // (Firestore supports Bytes, but Base64 is often more reliable across SDKs)
+        const base64Chunk = btoa(
+          new Uint8Array(chunkData).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
+
+        const chunkPath = `apkFiles/${fileId}/chunks/${i}`;
+        try {
+          await setDoc(doc(db, 'apkFiles', fileId, 'chunks', i.toString()), {
+            index: i,
+            data: base64Chunk
+          });
+        } catch (err) {
+          handleFirestoreError(err, OperationType.WRITE, chunkPath);
+        }
       }
 
       setUploadedFile({
         id: fileId,
         name: file.name,
         size: file.size,
-        downloadUrl: downloadUrl,
+        downloadUrl: `${window.location.origin}/?id=${fileId}`, // Shareable link
       });
       setFile(null);
     } catch (err: any) {
       console.error('Upload error:', err);
-      let msg = err.message || 'An error occurred during upload.';
-      try {
-        const parsed = JSON.parse(err.message);
-        if (parsed.error) msg = `Firebase Error: ${parsed.error}`;
-      } catch (e) {}
-      
-      setError(msg);
+      setError(err.message || 'An error occurred during upload.');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleDownload = async (fileId: string, fileName: string) => {
+    try {
+      // 1. Get metadata to know how many chunks
+      const metaDoc = await getDoc(doc(db, 'apkFiles', fileId));
+      if (!metaDoc.exists()) throw new Error("File metadata not found");
+      
+      const { totalChunks } = metaDoc.data();
+      const chunks: string[] = new Array(totalChunks);
+
+      // 2. Fetch all chunks
+      const chunksSnap = await getDocs(collection(db, 'apkFiles', fileId, 'chunks'));
+      chunksSnap.forEach(doc => {
+        const data = doc.data();
+        chunks[data.index] = data.data;
+      });
+
+      // 3. Reconstruct file
+      const byteArrays = chunks.map(base64 => {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes;
+      });
+
+      const blob = new Blob(byteArrays, { type: 'application/vnd.android.package-archive' });
+      const url = URL.createObjectURL(blob);
+      
+      // 4. Trigger download
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      console.error("Download error:", err);
+      alert("Failed to reconstruct file: " + err.message);
     }
   };
 
@@ -180,7 +231,7 @@ export default function App() {
               </h1>
             </div>
             <p className="text-white/40 text-lg md:text-xl max-w-xl mx-auto font-light">
-              Fast, secure, and simple APK sharing.
+              Powered by Firestore (Free Tier). No paid Storage plan required.
             </p>
           </motion.div>
 
@@ -261,7 +312,7 @@ export default function App() {
                   onClick={handleUpload}
                   className="px-10 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 active:scale-95 transition-all shadow-[0_10px_30px_rgba(255,255,255,0.2)]"
                 >
-                  Upload APK
+                  Upload APK to Firestore
                 </motion.button>
               )}
 
@@ -272,7 +323,7 @@ export default function App() {
                   className="flex items-center gap-3 text-white/60"
                 >
                   <Loader2 className="animate-spin" />
-                  <span className="font-medium tracking-wide uppercase text-xs">Uploading APK...</span>
+                  <span className="font-medium tracking-wide uppercase text-xs">Storing in Firestore (Free Tier)...</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -313,15 +364,13 @@ export default function App() {
                     <p className="text-white/40 mb-6">{formatSize(uploadedFile.size)}</p>
                     
                     <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-                      <a 
-                        href={uploadedFile.downloadUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                      <button 
+                        onClick={() => handleDownload(uploadedFile.id, uploadedFile.name)}
                         className="flex items-center gap-2 px-6 py-3 bg-blue-500 hover:bg-blue-600 rounded-2xl font-bold transition-all"
                       >
                         <Download size={18} />
                         Download Now
-                      </a>
+                      </button>
                       
                       <button 
                         onClick={copyToClipboard}
@@ -374,14 +423,12 @@ export default function App() {
                       <p className="font-bold truncate">{f.name}</p>
                       <p className="text-white/20 text-xs uppercase tracking-widest">{formatSize(f.size)}</p>
                     </div>
-                    <a 
-                      href={f.downloadUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button 
+                      onClick={() => handleDownload(f.id, f.name)}
                       className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all"
                     >
                       <Download size={18} />
-                    </a>
+                    </button>
                   </div>
                 </motion.div>
               ))}
@@ -395,7 +442,7 @@ export default function App() {
 
         {/* Footer */}
         <footer className="mt-40 text-center text-white/20 text-xs tracking-widest uppercase">
-          <p>© 2026 APK SHARE • SECURE LOCAL STORAGE</p>
+          <p>© 2026 APK SHARE • SECURE FIRESTORE STORAGE (FREE TIER)</p>
         </footer>
       </main>
     </div>
