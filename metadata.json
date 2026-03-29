@@ -1,0 +1,5 @@
+{
+  "name": "APK Share",
+  "description": "Upload APK files and generate shareable download links.",
+  "requestFramePermissions": []
+}
