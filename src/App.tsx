@@ -16,7 +16,15 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isBackendMissing, setIsBackendMissing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check if backend is available
+  React.useEffect(() => {
+    fetch('/api/health').catch(() => {
+      setIsBackendMissing(true);
+    });
+  }, []);
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -101,6 +109,17 @@ export default function App() {
               Fast, secure, and simple APK sharing. Upload your file and get a link instantly.
             </p>
           </motion.div>
+
+          {isBackendMissing && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="mt-8 p-4 bg-orange-500/10 border border-orange-500/20 rounded-2xl text-orange-400 text-sm max-w-lg mx-auto"
+            >
+              <p className="font-bold mb-1">⚠️ Backend Unavailable</p>
+              <p className="opacity-80">This app requires a Node.js server to handle uploads. It looks like you're running on a static host (like Netlify) where the server is not active.</p>
+            </motion.div>
+          )}
         </header>
 
         {/* Upload Section */}

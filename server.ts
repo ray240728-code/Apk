@@ -49,6 +49,11 @@ async function startServer() {
 
   app.use(express.json());
 
+  // API: Health Check
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
+  });
+
   // API: Upload APK
   app.post("/api/upload", upload.single("apk"), (req, res) => {
     if (!req.file) {
