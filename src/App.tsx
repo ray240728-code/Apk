@@ -21,9 +21,18 @@ export default function App() {
 
   // Check if backend is available
   React.useEffect(() => {
-    fetch('/api/health').catch(() => {
-      setIsBackendMissing(true);
-    });
+    fetch('/api/health')
+      .then(res => {
+        const contentType = res.headers.get("content-type");
+        if (res.ok && contentType && contentType.includes("application/json")) {
+          setIsBackendMissing(false);
+        } else {
+          setIsBackendMissing(true);
+        }
+      })
+      .catch(() => {
+        setIsBackendMissing(true);
+      });
   }, []);
 
   const formatSize = (bytes: number) => {
@@ -63,12 +72,17 @@ export default function App() {
         body: formData,
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Upload failed');
+      const contentType = response.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("Invalid server response. This app requires a Node.js backend to handle uploads. Please use the Cloud Run URL instead of Netlify.");
       }
 
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Upload failed');
+      }
+
       setUploadedFile(data);
       setFile(null);
     } catch (err: any) {
