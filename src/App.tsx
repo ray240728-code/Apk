@@ -17,12 +17,15 @@ interface UploadedFile {
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
   const [recentFiles, setRecentFiles] = useState<UploadedFile[]>([]);
   const [isLoadingRecent, setIsLoadingRecent] = useState(true);
   const [copied, setCopied] = useState(false);
   const [isFirebaseReady, setIsFirebaseReady] = useState<boolean | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
+  const [isSharedLink, setIsSharedLink] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Connection test to Firebase
@@ -63,6 +66,40 @@ export default function App() {
       });
       return () => unsubscribe();
     }
+  }, [isFirebaseReady]);
+
+  // Handle shareable link (id in query param)
+  useEffect(() => {
+    const handleSharedLink = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sharedId = urlParams.get('id');
+      
+      if (sharedId && isFirebaseReady) {
+        setIsInitialLoading(true);
+        setIsSharedLink(true);
+        try {
+          const docRef = doc(db, 'apkFiles', sharedId);
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+            const data = docSnap.data() as UploadedFile;
+            setUploadedFile({
+              ...data,
+              downloadUrl: `${window.location.origin}/?id=${sharedId}`
+            });
+          } else {
+            setError("The shared file link is invalid or has been removed.");
+          }
+        } catch (err: any) {
+          console.error("Error fetching shared file:", err);
+          setError("Failed to load the shared file.");
+        } finally {
+          setIsInitialLoading(false);
+        }
+      }
+    };
+
+    handleSharedLink();
   }, [isFirebaseReady]);
 
   const formatSize = (bytes: number) => {
@@ -159,6 +196,8 @@ export default function App() {
   };
 
   const handleDownload = async (fileId: string, fileName: string) => {
+    setIsDownloading(true);
+    setError(null);
     try {
       // 1. Get metadata to know how many chunks
       const metaDoc = await getDoc(doc(db, 'apkFiles', fileId));
@@ -169,19 +208,35 @@ export default function App() {
 
       // 2. Fetch all chunks
       const chunksSnap = await getDocs(collection(db, 'apkFiles', fileId, 'chunks'));
+      
+      if (chunksSnap.empty) throw new Error("No file data found in storage.");
+      
       chunksSnap.forEach(doc => {
         const data = doc.data();
-        chunks[data.index] = data.data;
+        if (data.index !== undefined && data.data) {
+          chunks[data.index] = data.data;
+        }
       });
+
+      // Check if all chunks are present
+      for (let i = 0; i < totalChunks; i++) {
+        if (!chunks[i]) {
+          throw new Error(`Missing file part ${i + 1} of ${totalChunks}. The file might be corrupted or still uploading.`);
+        }
+      }
 
       // 3. Reconstruct file
       const byteArrays = chunks.map(base64 => {
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
+        try {
+          const binaryString = atob(base64);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          return bytes;
+        } catch (e) {
+          throw new Error("Failed to decode file part. Data might be corrupted.");
         }
-        return bytes;
       });
 
       const blob = new Blob(byteArrays, { type: 'application/vnd.android.package-archive' });
@@ -197,7 +252,9 @@ export default function App() {
       URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error("Download error:", err);
-      alert("Failed to reconstruct file: " + err.message);
+      setError("Download failed: " + (err.message || "Unknown error"));
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -259,91 +316,100 @@ export default function App() {
         </header>
 
         {/* Upload Section */}
-        <section className="space-y-8">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="relative group"
-          >
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className={cn(
-                "relative z-10 border-2 border-dashed rounded-3xl p-12 md:p-20 transition-all duration-300 cursor-pointer flex flex-col items-center justify-center gap-6",
-                file ? "border-orange-500/50 bg-orange-500/5" : "border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]"
-              )}
-            >
-              <input 
-                type="file" 
-                ref={fileInputRef}
-                onChange={handleFileChange}
-                accept=".apk"
-                className="hidden"
-              />
-              
-              <div className={cn(
-                "w-20 h-20 rounded-2xl flex items-center justify-center transition-transform duration-500 group-hover:scale-110",
-                file ? "bg-orange-500 text-white shadow-[0_0_30px_rgba(249,115,22,0.4)]" : "bg-white/5 text-white/40"
-              )}>
-                {file ? <CheckCircle size={32} /> : <Upload size={32} />}
+        {!isSharedLink && (
+          <section className="space-y-8">
+            {isInitialLoading ? (
+              <div className="flex flex-col items-center justify-center p-20 bg-white/[0.02] border border-white/10 rounded-3xl gap-4">
+                <Loader2 className="animate-spin text-orange-500" size={40} />
+                <p className="text-white/40 uppercase tracking-widest text-xs">Loading shared file details...</p>
               </div>
+            ) : (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+                className="relative group"
+              >
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className={cn(
+                    "relative z-10 border-2 border-dashed rounded-3xl p-12 md:p-20 transition-all duration-300 cursor-pointer flex flex-col items-center justify-center gap-6",
+                    file ? "border-orange-500/50 bg-orange-500/5" : "border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]"
+                  )}
+                >
+                  <input 
+                    type="file" 
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    accept=".apk"
+                    className="hidden"
+                  />
+                  
+                  <div className={cn(
+                    "w-20 h-20 rounded-2xl flex items-center justify-center transition-transform duration-500 group-hover:scale-110",
+                    file ? "bg-orange-500 text-white shadow-[0_0_30px_rgba(249,115,22,0.4)]" : "bg-white/5 text-white/40"
+                  )}>
+                    {file ? <CheckCircle size={32} /> : <Upload size={32} />}
+                  </div>
 
-              <div className="text-center">
-                <p className="text-xl font-medium mb-1">
-                  {file ? file.name : "Drop your APK here"}
-                </p>
-                <p className="text-white/40 text-sm">
-                  {file ? formatSize(file.size) : "Maximum file size: 100MB"}
-                </p>
-              </div>
+                  <div className="text-center">
+                    <p className="text-xl font-medium mb-1">
+                      {file ? file.name : "Drop your APK here"}
+                    </p>
+                    <p className="text-white/40 text-sm">
+                      {file ? formatSize(file.size) : "Maximum file size: 100MB"}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Decorative border glow */}
+                <div className="absolute -inset-0.5 bg-gradient-to-r from-orange-500 to-blue-500 rounded-3xl opacity-0 group-hover:opacity-20 blur transition duration-500 pointer-events-none" />
+              </motion.div>
+            )}
+
+            <div className="flex justify-center">
+              <AnimatePresence mode="wait">
+                {file && !isUploading && (
+                  <motion.button
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    onClick={handleUpload}
+                    className="px-10 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 active:scale-95 transition-all shadow-[0_10px_30px_rgba(255,255,255,0.2)]"
+                  >
+                    Upload APK to Firestore
+                  </motion.button>
+                )}
+
+                {isUploading && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex items-center gap-3 text-white/60"
+                  >
+                    <Loader2 className="animate-spin" />
+                    <span className="font-medium tracking-wide uppercase text-xs">Storing in Firestore (Free Tier)...</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-            
-            {/* Decorative border glow */}
-            <div className="absolute -inset-0.5 bg-gradient-to-r from-orange-500 to-blue-500 rounded-3xl opacity-0 group-hover:opacity-20 blur transition duration-500 pointer-events-none" />
-          </motion.div>
 
-          <div className="flex justify-center">
-            <AnimatePresence mode="wait">
-              {file && !isUploading && (
-                <motion.button
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  onClick={handleUpload}
-                  className="px-10 py-4 bg-white text-black rounded-full font-bold text-lg hover:scale-105 active:scale-95 transition-all shadow-[0_10px_30px_rgba(255,255,255,0.2)]"
-                >
-                  Upload APK to Firestore
-                </motion.button>
-              )}
-
-              {isUploading && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="flex items-center gap-3 text-white/60"
-                >
-                  <Loader2 className="animate-spin" />
-                  <span className="font-medium tracking-wide uppercase text-xs">Storing in Firestore (Free Tier)...</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center gap-2 text-red-400 justify-center bg-red-400/10 p-6 rounded-3xl border border-red-400/20 text-center"
-            >
-              <div className="flex items-center gap-2">
-                <AlertCircle size={18} />
-                <span className="text-sm font-bold uppercase tracking-wider">Upload Error</span>
-              </div>
-              <p className="text-sm opacity-80">{error}</p>
-              <p className="text-[10px] opacity-40 mt-2 uppercase tracking-widest">Make sure to re-deploy the app to see the Firebase version.</p>
-            </motion.div>
-          )}
-        </section>
+            {error && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex flex-col items-center gap-2 text-red-400 justify-center bg-red-400/10 p-6 rounded-3xl border border-red-400/20 text-center"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={18} />
+                  <span className="text-sm font-bold uppercase tracking-wider">Upload Error</span>
+                </div>
+                <p className="text-sm opacity-80">{error}</p>
+                <p className="text-[10px] opacity-40 mt-2 uppercase tracking-widest">Make sure to re-deploy the app to see the Firebase version.</p>
+              </motion.div>
+            )}
+          </section>
+        )}
 
         {/* Result Section */}
         <AnimatePresence>
@@ -351,8 +417,18 @@ export default function App() {
             <motion.section
               initial={{ opacity: 0, y: 40 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mt-20 pt-20 border-t border-white/5"
+              className={cn("pt-20", !isSharedLink && "mt-20 border-t border-white/5")}
             >
+              {isSharedLink && (
+                <div className="text-center mb-10">
+                  <div className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500/10 text-orange-500 rounded-full text-xs font-bold uppercase tracking-widest mb-4">
+                    <CheckCircle size={14} />
+                    File Ready for Download
+                  </div>
+                  <h2 className="text-3xl font-bold">Your APK is ready</h2>
+                </div>
+              )}
+              
               <div className="bg-white/[0.02] border border-white/10 rounded-3xl p-8 md:p-12">
                 <div className="flex flex-col md:flex-row items-center gap-8">
                   <div className="w-24 h-24 bg-blue-500/20 rounded-3xl flex items-center justify-center text-blue-400">
@@ -366,10 +442,14 @@ export default function App() {
                     <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <button 
                         onClick={() => handleDownload(uploadedFile.id, uploadedFile.name)}
-                        className="flex items-center gap-2 px-6 py-3 bg-blue-500 hover:bg-blue-600 rounded-2xl font-bold transition-all"
+                        disabled={isDownloading}
+                        className={cn(
+                          "flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all shadow-[0_10px_30px_rgba(59,130,246,0.3)]",
+                          isDownloading ? "bg-blue-500/50 cursor-not-allowed" : "bg-blue-500 hover:bg-blue-600"
+                        )}
                       >
-                        <Download size={18} />
-                        Download Now
+                        {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                        {isDownloading ? "Preparing File..." : "Download Now"}
                       </button>
                       
                       <button 
@@ -389,6 +469,21 @@ export default function App() {
                     {uploadedFile.downloadUrl}
                   </code>
                 </div>
+
+                {isSharedLink && (
+                  <div className="mt-12 text-center">
+                    <button 
+                      onClick={() => {
+                        setIsSharedLink(false);
+                        setUploadedFile(null);
+                        window.history.pushState({}, '', window.location.pathname);
+                      }}
+                      className="text-white/40 hover:text-white text-xs uppercase tracking-widest font-bold transition-colors"
+                    >
+                      ← Upload your own APK
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.section>
           )}
@@ -425,9 +520,10 @@ export default function App() {
                     </div>
                     <button 
                       onClick={() => handleDownload(f.id, f.name)}
-                      className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all"
+                      disabled={isDownloading}
+                      className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all disabled:opacity-50"
                     >
-                      <Download size={18} />
+                      {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
                     </button>
                   </div>
                 </motion.div>
