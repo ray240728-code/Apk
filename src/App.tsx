@@ -83,10 +83,14 @@ export default function App() {
           
           if (docSnap.exists()) {
             const data = docSnap.data() as UploadedFile;
-            setUploadedFile({
+            const fullFile = {
               ...data,
               downloadUrl: `${window.location.origin}/?id=${sharedId}`
-            });
+            };
+            setUploadedFile(fullFile);
+            
+            // Auto-trigger download
+            handleDownload(sharedId, data.name);
           } else {
             setError("The shared file link is invalid or has been removed.");
           }
@@ -287,9 +291,11 @@ export default function App() {
                 APK SHARE
               </h1>
             </div>
-            <p className="text-white/40 text-lg md:text-xl max-w-xl mx-auto font-light">
-              Powered by Firestore (Free Tier). No paid Storage plan required.
-            </p>
+            {!isSharedLink && (
+              <p className="text-white/40 text-lg md:text-xl max-w-xl mx-auto font-light">
+                Powered by Firestore (Free Tier). No paid Storage plan required.
+              </p>
+            )}
           </motion.div>
 
           {/* Connection Status */}
@@ -490,55 +496,57 @@ export default function App() {
         </AnimatePresence>
 
         {/* Recent Uploads Section */}
-        <section className="mt-20 pt-20 border-t border-white/5">
-          <h2 className="text-2xl font-bold mb-8 tracking-tight flex items-center gap-3">
-            <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
-            Recent Uploads
-          </h2>
-          
-          {isLoadingRecent ? (
-            <div className="flex items-center gap-3 text-white/20 uppercase tracking-widest text-[10px]">
-              <Loader2 size={12} className="animate-spin" />
-              Fetching latest uploads...
-            </div>
-          ) : recentFiles.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {recentFiles.map((f) => (
-                <motion.div
-                  key={f.id}
-                  initial={{ opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="bg-white/[0.02] border border-white/10 p-6 rounded-3xl hover:bg-white/[0.04] transition-all group"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center text-white/40 group-hover:text-white/80 transition-colors">
-                      <File size={24} />
+        {!isSharedLink && (
+          <section className="mt-20 pt-20 border-t border-white/5">
+            <h2 className="text-2xl font-bold mb-8 tracking-tight flex items-center gap-3">
+              <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+              Recent Uploads
+            </h2>
+            
+            {isLoadingRecent ? (
+              <div className="flex items-center gap-3 text-white/20 uppercase tracking-widest text-[10px]">
+                <Loader2 size={12} className="animate-spin" />
+                Fetching latest uploads...
+              </div>
+            ) : recentFiles.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {recentFiles.map((f) => (
+                  <motion.div
+                    key={f.id}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="bg-white/[0.02] border border-white/10 p-6 rounded-3xl hover:bg-white/[0.04] transition-all group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center text-white/40 group-hover:text-white/80 transition-colors">
+                        <File size={24} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold truncate">{f.name}</p>
+                        <p className="text-white/20 text-xs uppercase tracking-widest">{formatSize(f.size)}</p>
+                      </div>
+                      <button 
+                        onClick={() => handleDownload(f.id, f.name)}
+                        disabled={isDownloading}
+                        className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all disabled:opacity-50"
+                      >
+                        {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                      </button>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold truncate">{f.name}</p>
-                      <p className="text-white/20 text-xs uppercase tracking-widest">{formatSize(f.size)}</p>
-                    </div>
-                    <button 
-                      onClick={() => handleDownload(f.id, f.name)}
-                      disabled={isDownloading}
-                      className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all disabled:opacity-50"
-                    >
-                      {isDownloading ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                    </button>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-white/20 text-sm italic">
-              No APKs have been uploaded yet. Be the first!
-            </div>
-          )}
-        </section>
+                  </motion.div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-white/20 text-sm italic">
+                No APKs have been uploaded yet. Be the first!
+              </div>
+            )}
+          </section>
+        )}
 
         {/* Footer */}
         <footer className="mt-40 text-center text-white/20 text-xs tracking-widest uppercase">
-          <p>© 2026 APK SHARE • SECURE FIRESTORE STORAGE (FREE TIER)</p>
+          <p>© 2026 APK SHARE {!isSharedLink && "• SECURE FIRESTORE STORAGE (FREE TIER)"}</p>
         </footer>
       </main>
     </div>
