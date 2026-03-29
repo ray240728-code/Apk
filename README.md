@@ -1,20 +1,44 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# APK SHARE - Firebase Edition
 
-# Run and deploy your AI Studio app
+This application is a static React app that uses Firebase for storage and metadata. It is designed to be hosted on static platforms like Netlify, Vercel, or InfinityFree.
 
-This contains everything you need to run your app locally.
+## Deployment Instructions
 
-View your app in AI Studio: https://ai.studio/apps/9c6e4bc5-6aa6-402b-8259-15b10fd9da37
+### 1. Build the Application
+Run the following command to create a production build:
+```bash
+npm run build
+```
+This will generate a `dist/` folder containing the static files.
 
-## Run Locally
+### 2. Deploy to Netlify
+-   **Option A (Drag & Drop):** Drag the `dist/` folder into the Netlify dashboard.
+-   **Option B (Git):** Connect your repository to Netlify. The `netlify.toml` file is already configured to handle the build and routing.
 
-**Prerequisites:**  Node.js
+### 3. Deploy to InfinityFree
+-   Upload the contents of the `dist/` folder to your `htdocs/` directory via FTP.
+-   Ensure you have a `.htaccess` file for SPA routing (if needed).
 
+## Firebase Configuration
+The app uses the configuration in `src/firebase-applet-config.json`. Ensure your Firebase project has **Storage** and **Firestore** enabled.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+### Firestore Rules
+The `firestore.rules` file is included in the project. You can deploy it using the Firebase CLI:
+```bash
+firebase deploy --only firestore:rules
+```
+
+### Storage Rules
+Ensure your Firebase Storage rules allow public reads and authenticated (or public, depending on your needs) writes.
+Example Storage Rules:
+```javascript
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /apks/{fileId}/{fileName} {
+      allow read: if true;
+      allow write: if request.resource.size < 100 * 1024 * 1024; // 100MB limit
+    }
+  }
+}
+```

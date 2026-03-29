@@ -1,16 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Download, File, CheckCircle, AlertCircle, Loader2, Share2, Copy } from 'lucide-react';
+import { Upload, Download, File, CheckCircle, AlertCircle, Loader2, Share2, Copy, Wifi, WifiOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
-import { db, storage } from './firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from './firebase';
+import { doc, setDoc, getDoc, serverTimestamp, getDocFromServer, collection, query, orderBy, limit, onSnapshot, Timestamp } from 'firebase/firestore';
+import { handleFirestoreError, OperationType } from './lib/firebaseUtils';
 
 interface UploadedFile {
   id: string;
   name: string;
   size: number;
   downloadUrl: string;
+  createdAt?: any;
 }
 
 export default function App() {
@@ -18,8 +19,51 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadedFile, setUploadedFile] = useState<UploadedFile | null>(null);
+  const [recentFiles, setRecentFiles] = useState<UploadedFile[]>([]);
+  const [isLoadingRecent, setIsLoadingRecent] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [isFirebaseReady, setIsFirebaseReady] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Connection test to Firebase
+  useEffect(() => {
+    const testConnection = async () => {
+      const path = 'test/connection';
+      try {
+        // Attempt to read a test document to verify Firestore connection
+        await getDocFromServer(doc(db, 'test', 'connection'));
+        setIsFirebaseReady(true);
+      } catch (err: any) {
+        console.error("Firebase connection test failed:", err);
+        // If it's just "not found", that's actually a success (connection worked)
+        if (err.code === 'not-found' || !err.message.includes('offline')) {
+          setIsFirebaseReady(true);
+        } else {
+          setIsFirebaseReady(false);
+          // Don't throw here to avoid crashing the whole app immediately, 
+          // but we could use handleFirestoreError if we wanted to be strict
+        }
+      }
+    };
+    testConnection();
+  }, []);
+
+  // Fetch recent files
+  useEffect(() => {
+    if (isFirebaseReady) {
+      const path = 'apkFiles';
+      const q = query(collection(db, path), orderBy('createdAt', 'desc'), limit(10));
+      const unsubscribe = onSnapshot(q, (snapshot) => {
+        const files = snapshot.docs.map(doc => doc.data() as UploadedFile);
+        setRecentFiles(files);
+        setIsLoadingRecent(false);
+      }, (err) => {
+        setIsLoadingRecent(false);
+        handleFirestoreError(err, OperationType.LIST, path);
+      });
+      return () => unsubscribe();
+    }
+  }, [isFirebaseReady]);
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -50,25 +94,40 @@ export default function App() {
     setError(null);
 
     try {
-      const fileId = crypto.randomUUID();
-      const storagePath = `apks/${fileId}/${file.name}`;
-      const storageRef = ref(storage, storagePath);
+      // 1. Upload to Local Server API
+      const formData = new FormData();
+      formData.append('file', file);
 
-      // 1. Upload to Firebase Storage
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadUrl = await getDownloadURL(snapshot.ref);
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Upload failed');
+      }
+
+      const uploadResult = await response.json();
+      const fileId = uploadResult.id;
+      const downloadUrl = window.location.origin + uploadResult.url;
 
       // 2. Store metadata in Firestore
       const fileMetadata = {
         id: fileId,
         name: file.name,
         size: file.size,
-        storagePath: storagePath,
+        storagePath: uploadResult.url,
         downloadUrl: downloadUrl,
         createdAt: serverTimestamp(),
       };
 
-      await setDoc(doc(db, 'apkFiles', fileId), fileMetadata);
+      const path = `apkFiles/${fileId}`;
+      try {
+        await setDoc(doc(db, 'apkFiles', fileId), fileMetadata);
+      } catch (err) {
+        handleFirestoreError(err, OperationType.WRITE, path);
+      }
 
       setUploadedFile({
         id: fileId,
@@ -79,7 +138,13 @@ export default function App() {
       setFile(null);
     } catch (err: any) {
       console.error('Upload error:', err);
-      setError(err.message || 'An error occurred during upload.');
+      let msg = err.message || 'An error occurred during upload.';
+      try {
+        const parsed = JSON.parse(err.message);
+        if (parsed.error) msg = `Firebase Error: ${parsed.error}`;
+      } catch (e) {}
+      
+      setError(msg);
     } finally {
       setIsUploading(false);
     }
@@ -109,13 +174,37 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6 }}
           >
-            <h1 className="text-6xl md:text-8xl font-bold tracking-tighter mb-4 bg-gradient-to-b from-white to-white/40 bg-clip-text text-transparent">
-              APK SHARE
-            </h1>
+            <div className="flex items-center justify-center gap-2 mb-4">
+              <h1 className="text-6xl md:text-8xl font-bold tracking-tighter bg-gradient-to-b from-white to-white/40 bg-clip-text text-transparent">
+                APK SHARE
+              </h1>
+            </div>
             <p className="text-white/40 text-lg md:text-xl max-w-xl mx-auto font-light">
-              Fast, secure, and simple APK sharing. Upload your file and get a link instantly.
+              Fast, secure, and simple APK sharing.
             </p>
           </motion.div>
+
+          {/* Connection Status */}
+          <div className="mt-8 flex justify-center">
+            <AnimatePresence mode="wait">
+              {isFirebaseReady === null ? (
+                <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center gap-2 text-white/20 text-xs uppercase tracking-widest">
+                  <Loader2 size={12} className="animate-spin" />
+                  Connecting to Firebase...
+                </motion.div>
+              ) : isFirebaseReady ? (
+                <motion.div key="ready" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 text-green-500/60 text-xs uppercase tracking-widest">
+                  <Wifi size={12} />
+                  System Ready (Firebase Connected)
+                </motion.div>
+              ) : (
+                <motion.div key="error" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 text-red-500/60 text-xs uppercase tracking-widest">
+                  <WifiOff size={12} />
+                  Firebase Connection Failed
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </header>
 
         {/* Upload Section */}
@@ -183,7 +272,7 @@ export default function App() {
                   className="flex items-center gap-3 text-white/60"
                 >
                   <Loader2 className="animate-spin" />
-                  <span className="font-medium tracking-wide uppercase text-xs">Uploading to cloud...</span>
+                  <span className="font-medium tracking-wide uppercase text-xs">Uploading APK...</span>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -193,10 +282,14 @@ export default function App() {
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex items-center gap-2 text-red-400 justify-center bg-red-400/10 py-3 rounded-xl border border-red-400/20"
+              className="flex flex-col items-center gap-2 text-red-400 justify-center bg-red-400/10 p-6 rounded-3xl border border-red-400/20 text-center"
             >
-              <AlertCircle size={18} />
-              <span className="text-sm font-medium">{error}</span>
+              <div className="flex items-center gap-2">
+                <AlertCircle size={18} />
+                <span className="text-sm font-bold uppercase tracking-wider">Upload Error</span>
+              </div>
+              <p className="text-sm opacity-80">{error}</p>
+              <p className="text-[10px] opacity-40 mt-2 uppercase tracking-widest">Make sure to re-deploy the app to see the Firebase version.</p>
             </motion.div>
           )}
         </section>
@@ -252,9 +345,57 @@ export default function App() {
           )}
         </AnimatePresence>
 
+        {/* Recent Uploads Section */}
+        <section className="mt-20 pt-20 border-t border-white/5">
+          <h2 className="text-2xl font-bold mb-8 tracking-tight flex items-center gap-3">
+            <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />
+            Recent Uploads
+          </h2>
+          
+          {isLoadingRecent ? (
+            <div className="flex items-center gap-3 text-white/20 uppercase tracking-widest text-[10px]">
+              <Loader2 size={12} className="animate-spin" />
+              Fetching latest uploads...
+            </div>
+          ) : recentFiles.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {recentFiles.map((f) => (
+                <motion.div
+                  key={f.id}
+                  initial={{ opacity: 0, scale: 0.98 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-white/[0.02] border border-white/10 p-6 rounded-3xl hover:bg-white/[0.04] transition-all group"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center text-white/40 group-hover:text-white/80 transition-colors">
+                      <File size={24} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold truncate">{f.name}</p>
+                      <p className="text-white/20 text-xs uppercase tracking-widest">{formatSize(f.size)}</p>
+                    </div>
+                    <a 
+                      href={f.downloadUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-10 h-10 bg-white/5 hover:bg-white/10 rounded-xl flex items-center justify-center text-white/40 hover:text-white transition-all"
+                    >
+                      <Download size={18} />
+                    </a>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-white/20 text-sm italic">
+              No APKs have been uploaded yet. Be the first!
+            </div>
+          )}
+        </section>
+
         {/* Footer */}
         <footer className="mt-40 text-center text-white/20 text-xs tracking-widest uppercase">
-          <p>© 2026 APK SHARE • SECURE FILE TRANSFER</p>
+          <p>© 2026 APK SHARE • SECURE LOCAL STORAGE</p>
         </footer>
       </main>
     </div>
